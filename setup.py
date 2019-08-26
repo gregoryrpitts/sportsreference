@@ -7,7 +7,7 @@ with open('VERSION', 'r') as f:
     version = f.read()
 
 setup(
-    name='sportsreference',
+    name='sportsreference-sio',
     version=version,
     author='Robert Clark',
     author_email='robdclark@outlook.com',

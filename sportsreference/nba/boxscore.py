@@ -11,7 +11,8 @@ from .constants import (BOXSCORE_ELEMENT_INDEX,
                         BOXSCORE_URL,
                         BOXSCORES_URL)
 from .player import AbstractPlayer, _int_property_decorator
-
+from sportsreference import utils
+from sportsreference.constants import AWAY, HOME
 
 class BoxscorePlayer(AbstractPlayer):
     """
@@ -86,6 +87,7 @@ class BoxscorePlayer(AbstractPlayer):
             'offensive_rebounds': self.offensive_rebounds,
             'personal_fouls': self.personal_fouls,
             'points': self.points,
+            'seconds_played': self.seconds_played,
             'steal_percentage': self.steal_percentage,
             'steals': self.steals,
             'three_point_attempt_rate': self.three_point_attempt_rate,
@@ -103,6 +105,18 @@ class BoxscorePlayer(AbstractPlayer):
             'usage_percentage': self.usage_percentage
         }
         return pd.DataFrame([fields_to_include], index=[self._player_id])
+
+    @property
+    def seconds_played(self):
+        """
+        Returns an ``integer`` of the number of game seconds the player was on the
+        court for.
+        """
+        if self._minutes_played[self._index]:
+            minutes, seconds = self._minutes_played[self._index].split(':')
+            seconds = int(minutes) * 60 + int(seconds)
+            return int(seconds)
+        return None
 
     @property
     def minutes_played(self):
@@ -384,6 +398,59 @@ class Boxscore:
                 continue
         return tables
 
+    def _find_inactive_list(self, boxscore):
+        home_inactives = []
+        away_inactives = []
+        if self.winner == HOME:
+            home_abbr = self.winning_abbr
+            away_abbr = self.losing_abbr
+        else:
+            home_abbr = self.losing_abbr
+            away_abbr = self.winning_abbr
+
+        # Construct the div ID of the Home Team's Advanced Boxscore Table,
+        # which is the div before the "Inactives" div.
+        scheme = 'div#all_box_' + home_abbr.lower() + '_advanced'
+
+        # Grab that div, which we will now parse.
+        inactives_div = boxscore(scheme).next()
+
+        # Find the span that precedes the Away Team's inactive Players.
+        # They come as links, so process until there are no more links.
+        away_span = inactives_div('span').filter(lambda i: pq(this).text() == away_abbr.upper())
+        # print(away_abbr.upper())
+        while away_span.next().is_('a'):
+            first_a = away_span.next()
+            uri = re.sub(r'.*/players/./', '', first_a.attr['href'])
+            player_id = re.sub('.html', '', uri)
+            # print(player_id)
+            away_inactives.append(player_id)
+            # print(first_a)
+            away_span = away_span.next()
+
+        # Find the span that precedes the Home Team's inactive Players.
+        # They come as links, so process until there are no more links.
+        home_span = inactives_div('span').filter(lambda i: pq(this).text() == home_abbr.upper())
+        # print(home_abbr.upper())
+        while home_span.next().is_('a'):
+            first_a = home_span.next()
+            uri = re.sub(r'.*/players/./', '', first_a.attr['href'])
+            player_id = re.sub('.html', '', uri)
+            home_inactives.append(player_id)
+            # print(first_a)
+            home_span = home_span.next()
+
+        # Find the span that precedes the Officials
+        # They come as links, so process until there are no more links.
+        officials_strong = inactives_div('strong').filter(lambda i: pq(this).text() == 'Officials:')
+        # print(officials_strong)
+        while officials_strong.next().is_('a'):
+            first_a = officials_strong.next()
+            # print(first_a)
+            officials_strong = officials_strong.next()
+
+        return away_inactives, home_inactives
+
     def _find_player_id(self, row):
         """
         Find the player's ID.
@@ -548,6 +615,31 @@ class Boxscore:
         away_players, home_players = self._instantiate_players(player_dict)
         return away_players, home_players
 
+    def _find_inactives(self, boxscore):
+        """
+        Find all inactive player for each team.
+
+        This returns a list of Player ID for each inactive player
+        in a specific game. It's not a full PlayerBoxScore Object
+        like other functions, however we only need to return the
+        player key because we can look up the remaining player data
+        in our own database tables.
+
+        Parameters
+        ----------
+        boxscore : PyQuery object
+            A PyQuery object containing all of the HTML data from the boxscore.
+
+        Returns
+        -------
+        tuple
+            Returns a ``tuple`` in the format (away_inactive_players, home_inactive_players)
+            where each element is a list of player instances for the away and
+            home teams, respectively.
+        """
+
+        return self._find_inactive_list(boxscore)
+
     def _parse_game_data(self, uri):
         """
         Parses a value for every attribute.
@@ -599,6 +691,7 @@ class Boxscore:
                                        index)
             setattr(self, field, value)
         self._away_players, self._home_players = self._find_players(boxscore)
+        self._away_inactives, self._home_inactives = self._find_inactives(boxscore)
 
     @property
     def dataframe(self):
@@ -731,6 +824,22 @@ class Boxscore:
         player on the home team.
         """
         return self._home_players
+
+    @property
+    def away_inactives(self):
+        """
+        Returns a ``list`` of ``PlayerID``s for each
+        inactive player on the away team.
+        """
+        return self._away_inactives
+
+    @property
+    def home_inactives(self):
+        """
+        Returns a ``list`` of ``PlayerID``s class instances for each
+        inactive player on the home team.
+        """
+        return self._home_inactives
 
     @property
     def date(self):
